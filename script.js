@@ -28,17 +28,17 @@ const SOUNDS = [
     filter: "bandpass", freq: 650, q: 0.5, gain: 0.13, flicker: { rate: 0.4, depth: 0.04 },
     crackle: { minMs: 200, maxMs: 900, gainPeak: 0.26, duration: 0.05 } },
   { id: "trees",   label: "Trees",       emoji: "🌳", color: "#2e7d32",
-    // Bright rustling-leaves texture: a slow cutoff drift for gusts through the canopy,
-    // plus a faster, shallower flutter so it reads as many small leaves, not one big gust.
-    filter: "bandpass", freq: 2000, q: 1.1, gain: 0.14,
-    lfoFreq: { rate: 0.18, depth: 400 }, flicker: { rate: 0.9, depth: 0.05 } },
+    // A soft, slow sway through the canopy rather than active rustling: gentle cutoff drift
+    // plus a light, unhurried flutter, both toned down for a calm "leaves in a breeze" feel.
+    filter: "bandpass", freq: 2000, q: 1.1, gain: 0.09,
+    lfoFreq: { rate: 0.1, depth: 250 }, flicker: { rate: 0.55, depth: 0.035 } },
   { id: "birds",   label: "Birds",       emoji: "🐦", color: "#ffd54f",
     burst: { kind: "song", freqRange: [1600, 2600], duration: 0.12, gainPeak: 0.22, minMs: 700, maxMs: 2800 } },
   { id: "crickets",label: "Crickets",    emoji: "🦗", color: "#aed581",
     burst: { kind: "trill", freqRange: [4200, 4600], duration: 0.05, repeats: 3, gainPeak: 0.22, minMs: 200, maxMs: 500 } },
   { id: "chimes",  label: "Wind Chimes", emoji: "🎐", color: "#f48fb1",
-    // A moderate, gentler register than before, and quieter so it doesn't jump out.
-    burst: { kind: "chime", notes: [659, 784, 880, 1046, 1175], duration: 1.6, gainPeak: 0.22, minMs: 1800, maxMs: 5000 } },
+    // A moderate register, and a longer ring so each tube has time to hang and decay naturally.
+    burst: { kind: "chime", notes: [659, 784, 880, 1046, 1175], duration: 2.1, gainPeak: 0.24, minMs: 1800, maxMs: 5000 } },
   { id: "conga",   label: "Conga Drums", emoji: "🥁", color: "#ff7043",
     rhythm: { stepMs: 280, pattern: [1, 0, 0.6, 0, 1, 0.6, 0, 0] } },
 ];
@@ -92,16 +92,17 @@ function playTone(ctx, destination, { freq, freqPeak, freqTo, duration = 0.15, g
   osc.onended = () => { osc.disconnect(); env.disconnect(); };
 }
 
-// A single short noise pop (raindrop tap / ember crackle); self-disconnects when done.
+// A single short noise pop (raindrop tap / ember crackle / metallic tick); self-disconnects when done.
 // An optional lowpass (filterFreq) rounds off the transient for soft droplets vs. bright fire snaps.
-function playNoisePop(ctx, destination, { gainPeak = 0.5, duration = 0.04, filterFreq } = {}) {
+function playNoisePop(ctx, destination, { gainPeak = 0.5, duration = 0.04, filterFreq, delay = 0 } = {}) {
+  const t0 = ctx.currentTime + delay;
   const src = ctx.createBufferSource();
   src.buffer = noiseBuffer;
   const offset = Math.random() * (noiseBuffer.duration - duration);
   const env = ctx.createGain();
-  env.gain.setValueAtTime(0, ctx.currentTime);
-  env.gain.linearRampToValueAtTime(gainPeak, ctx.currentTime + 0.008);
-  env.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+  env.gain.setValueAtTime(0, t0);
+  env.gain.linearRampToValueAtTime(gainPeak, t0 + 0.008);
+  env.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
   let filter = null;
   let tail = src;
   if (filterFreq) {
@@ -112,7 +113,7 @@ function playNoisePop(ctx, destination, { gainPeak = 0.5, duration = 0.04, filte
     tail = filter;
   }
   tail.connect(env).connect(destination);
-  src.start(ctx.currentTime, offset, duration);
+  src.start(t0, offset, duration);
   src.onended = () => { src.disconnect(); if (filter) filter.disconnect(); env.disconnect(); };
 }
 
@@ -186,12 +187,20 @@ function scheduleBurst(ctx, destination, cfg) {
       const freq = cfg.notes[Math.floor(Math.random() * cfg.notes.length)];
       playTwinkle(ctx, destination, { freq, duration: cfg.duration, gainPeak: cfg.gainPeak });
     } else if (cfg.kind === "chime") {
-      // Soft, warm bell: fundamental plus quiet, purely consonant overtones (octave + fifth).
-      // No detuning between tones - that beating reads as dissonant/eerie, not gentle.
-      const freq = cfg.notes[Math.floor(Math.random() * cfg.notes.length)];
-      playTone(ctx, destination, { freq, duration: cfg.duration, gainPeak: cfg.gainPeak, wave: "sine" });
-      playTone(ctx, destination, { freq: freq * 2, duration: cfg.duration * 0.6, gainPeak: cfg.gainPeak * 0.3, wave: "sine" });
-      playTone(ctx, destination, { freq: freq * 3, duration: cfg.duration * 0.35, gainPeak: cfg.gainPeak * 0.15, wave: "sine" });
+      // Real hanging (tubular) wind chimes: a cluster of tubes clinking near-simultaneously as a
+      // gust catches them, each ringing with a tube's actual inharmonic partials (~2.76x, ~5.4x
+      // the fundamental - not a clean octave/fifth, which is what makes a struck metal tube sound
+      // like a "chime" rather than a bell or flute note) and a long metallic ring.
+      const noteCount = 2 + Math.floor(Math.random() * 2);
+      for (let i = 0; i < noteCount; i++) {
+        const freq = cfg.notes[Math.floor(Math.random() * cfg.notes.length)];
+        const delay = i * (0.04 + Math.random() * 0.09);
+        const ring = cfg.duration * (0.85 + Math.random() * 0.3);
+        playNoisePop(ctx, destination, { gainPeak: cfg.gainPeak * 0.35, duration: 0.012, delay });
+        playTone(ctx, destination, { freq, duration: ring, gainPeak: cfg.gainPeak * 0.75, wave: "sine", delay });
+        playTone(ctx, destination, { freq: freq * 2.76, duration: ring * 0.55, gainPeak: cfg.gainPeak * 0.32, wave: "sine", delay });
+        playTone(ctx, destination, { freq: freq * 5.4, duration: ring * 0.28, gainPeak: cfg.gainPeak * 0.14, wave: "sine", delay });
+      }
     } else if (cfg.kind === "trill") {
       for (let i = 0; i < cfg.repeats; i++) {
         const freq = cfg.freqRange[0] + Math.random() * (cfg.freqRange[1] - cfg.freqRange[0]);
